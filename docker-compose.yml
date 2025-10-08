@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n_timesheet
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      # Temel Ayarlar
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=admin
+      - N8N_BASIC_AUTH_PASSWORD=Timesheet2024!Secure
+      
+      # Host Ayarları
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=http://localhost:5678/
+      
+      # Timezone
+      - GENERIC_TIMEZONE=Europe/Istanbul
+      - TZ=Europe/Istanbul
+      
+      # Ortam
+      - NODE_ENV=production
+      
+      # Executions (workflow history)
+      - EXECUTIONS_DATA_SAVE_ON_ERROR=all
+      - EXECUTIONS_DATA_SAVE_ON_SUCCESS=all
+      - EXECUTIONS_DATA_SAVE_MANUAL_EXECUTIONS=true
+      
+      # Log Ayarları
+      - N8N_LOG_LEVEL=info
+      - N8N_LOG_OUTPUT=console
+      
+    volumes:
+      # n8n data (workflows, credentials, settings)
+      - n8n_data:/home/node/.n8n
+      # Dosya paylaşımı için
+      - ./shared_files:/files
+      # Örnek dosyalar için
+      - ./examples:/examples:ro
+    
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:5678/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  n8n_data:
+    driver: local
+
+networks:
+  default:
+    name: n8n_network

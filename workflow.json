@@ -1,0 +1,397 @@
+{
+  "name": "Timesheet Processing Workflow",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "cronExpression": "0 18 * * *"
+            }
+          ]
+        }
+      },
+      "id": "f1e4c567-8901-2345-6789-012345678901",
+      "name": "Daily Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {},
+      "id": "f1e4c567-8901-2345-6789-012345678902",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 200]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "documentId": "={{$env.GOOGLE_DOCS_ID}}",
+        "simple": false,
+        "options": {}
+      },
+      "id": "f1e4c567-8901-2345-6789-012345678903",
+      "name": "Read Google Docs",
+      "type": "n8n-nodes-base.googleDocs",
+      "typeVersion": 2,
+      "position": [400, 250],
+      "credentials": {
+        "googleApi": {
+          "id": "google-oauth-credential",
+          "name": "Google OAuth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Google Docs içeriğini parse et\nconst docContent = $input.first().json.body.content;\nlet parsedEntries = [];\n\n// Text extraction fonksiyonu\nfunction extractText(element) {\n  if (element.paragraph && element.paragraph.elements) {\n    return element.paragraph.elements\n      .map(el => el.textRun ? el.textRun.content : '')\n      .join('');\n  }\n  return '';\n}\n\n// Tüm text içeriğini çıkar\nlet fullText = '';\nfunction processElement(element) {\n  if (element.paragraph) {\n    fullText += extractText(element);\n  }\n  if (element.structuralElements) {\n    element.structuralElements.forEach(processElement);\n  }\n}\n\nif (docContent && Array.isArray(docContent)) {\n  docContent.forEach(processElement);\n}\n\n// Satırları böl ve temizle\nconst lines = fullText.split('\\n')\n  .map(line => line.trim())\n  .filter(line => line.length > 0);\n\n// Tarih regex (DD/MM/YYYY, DD.MM.YYYY, DD-MM-YYYY formatları)\nconst datePattern = /^(\\d{1,2}[\\/\\.-]\\d{1,2}[\\/\\.-]\\d{2,4})$/;\n\n// İsim regex (İki kelime, büyük harfle başlayan)\nconst namePattern = /^([A-ZÇĞıİÖŞÜ][a-zçğıöşüA-ZÇĞIİÖŞÜ]+\\s+[A-ZÇĞıİÖŞÜ][a-zçğıöşüA-ZÇĞIİÖŞÜ]+)$/;\n\nlet currentEntry = null;\nlet entries = [];\n\nfor (let i = 0; i < lines.length; i++) {\n  const line = lines[i];\n  \n  // Tarih kontrolü\n  if (datePattern.test(line)) {\n    // Önceki entry'yi kaydet\n    if (currentEntry && currentEntry.name && currentEntry.tasks.length > 0) {\n      entries.push(currentEntry);\n    }\n    \n    currentEntry = {\n      date: line,\n      name: '',\n      tasks: [],\n      rawContent: line\n    };\n    continue;\n  }\n  \n  // İsim kontrolü\n  if (namePattern.test(line) && currentEntry) {\n    currentEntry.name = line;\n    currentEntry.rawContent += '\\n' + line;\n    continue;\n  }\n  \n  // Task kontrolü (- ile başlayan veya normal text)\n  if (currentEntry && currentEntry.name && line.length > 2) {\n    // \"-\" işaretini temizle\n    const cleanTask = line.replace(/^[\\-\\*\\•]\\s*/, '').trim();\n    if (cleanTask.length > 0) {\n      currentEntry.tasks.push(cleanTask);\n      currentEntry.rawContent += '\\n' + line;\n    }\n  }\n}\n\n// Son entry'yi ekle\nif (currentEntry && currentEntry.name && currentEntry.tasks.length > 0) {\n  entries.push(currentEntry);\n}\n\n// Debug log\nconsole.log('Toplam bulunan entry sayısı:', entries.length);\nentries.forEach((entry, index) => {\n  console.log(`Entry ${index + 1}:`, {\n    date: entry.date,\n    name: entry.name,\n    taskCount: entry.tasks.length\n  });\n});\n\n// Eğer hiç entry bulunamazsa hata döndür\nif (entries.length === 0) {\n  return [{\n    json: {\n      error: 'No valid entries found',\n      fullText: fullText,\n      lines: lines\n    }\n  }];\n}\n\n// Her entry için ayrı output\nreturn entries.map((entry, index) => ({\n  json: {\n    date: entry.date,\n    name: entry.name,\n    tasks: entry.tasks,\n    rawContent: entry.rawContent,\n    tasksText: entry.tasks.join('. '),\n    entryId: `${entry.date}_${entry.name}`.replace(/[^a-zA-Z0-9]/g, '_'),\n    entryIndex: index + 1,\n    totalEntries: entries.length\n  }\n}));"
+      },
+      "id": "f1e4c567-8901-2345-6789-012345678904",
+      "name": "Parse Docs Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 250]
+    },
+    {
+      "parameters": {
+        "model": "={{$env.CLAUDE_MODEL || 'claude-3-5-sonnet-20241022'}}",
+        "prompt": "Sen bir timesheet uzmanısın. Aşağıdaki ham timesheet verisini analiz et ve düzenle:\n\nTarih: {{$json.date}}\nKişi: {{$json.name}}\nYapılan İşler: {{$json.tasksText}}\n\nLütfen bu veriyi şu kurallara göre düzenle:\n1. Belirsiz veya kısa açıklamaları detaylandır\n2. Teknik terimleri düzelt ve açıkla\n3. Her görev için uygun kategori belirle (Geliştirme, Test, Toplantı, Analiz, Dokümantasyon, Bug Fix, Code Review vb.)\n4. Her görev için gerçekçi süre tahminleri ekle (0.5-8 saat arası)\n5. Proje adını tahmin et veya 'Genel' olarak belirle\n6. Türkçe karakterleri düzelt\n7. Toplam sürenin 8 saati geçmemesine dikkat et\n\nÇıktıyı sadece JSON formatında ver, başka açıklama ekleme:\n{\n  \"date\": \"DD/MM/YYYY\",\n  \"employee\": \"Ad Soyad\",\n  \"tasks\": [\n    {\n      \"description\": \"Detaylı ve açık görev açıklaması\",\n      \"category\": \"Kategori\",\n      \"estimatedHours\": 2.0,\n      \"project\": \"Proje adı veya Genel\"\n    }\n  ],\n  \"totalHours\": 8.0,\n  \"notes\": \"Varsa ek notlar\"\n}",
+        "options": {
+          "temperature": 0.3,
+          "maxTokens": 2000
+        }
+      },
+      "id": "f1e4c567-8901-2345-6789-012345678905",
+      "name": "Process with Claude",
+      "type": "n8n-nodes-base.anthropic",
+      "typeVersion": 1,
+      "position": [800, 250],
+      "credentials": {
+        "anthropicApi": {
+          "id": "claude-api-credential",
+          "name": "Claude API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Claude'un JSON çıktısını parse et\nlet claudeResponse = $input.first().json.response || $input.first().json.text || '';\n\n// JSON'u temizle (code block işaretlerini kaldır)\nclaudeResponse = claudeResponse.replace(/```json\\s*/g, '').replace(/```\\s*/g, '').trim();\n\ntry {\n  // JSON'u parse et\n  const parsedData = JSON.parse(claudeResponse);\n  \n  // Tarih formatını düzenle\n  let formattedDate = parsedData.date;\n  if (formattedDate && formattedDate.includes('/')) {\n    const dateParts = formattedDate.split('/');\n    if (dateParts.length === 3) {\n      // DD/MM/YYYY formatında olduğundan emin ol\n      formattedDate = `${dateParts[0].padStart(2, '0')}/${dateParts[1].padStart(2, '0')}/${dateParts[2]}`;\n    }\n  }\n  \n  // Employee adını temizle\n  const cleanEmployee = (parsedData.employee || '').trim();\n  \n  // Tasks'ları kontrol et ve temizle\n  const cleanTasks = (parsedData.tasks || []).map((task, index) => ({\n    rowNumber: index + 1,\n    description: (task.description || '').trim(),\n    category: (task.category || 'Genel').trim(),\n    project: (task.project || 'Genel').trim(),\n    hours: parseFloat(task.estimatedHours || 1),\n    startTime: '',\n    endTime: ''\n  }));\n  \n  // Toplam saati kontrol et\n  const calculatedTotal = cleanTasks.reduce((sum, task) => sum + task.hours, 0);\n  const finalTotal = parsedData.totalHours || calculatedTotal || 8;\n  \n  // Sheet ismi için güvenli karakter kullan\n  const safeEmployeeName = cleanEmployee\n    .replace(/[^a-zA-Z0-9çğıöşüÇĞIİÖŞÜ\\s]/g, '')\n    .replace(/\\s+/g, '_')\n    .substring(0, 25); // Excel sheet isim limiti\n  \n  // Excel formatına dönüştür\n  const excelData = {\n    // Ana veriler\n    employee: cleanEmployee,\n    date: formattedDate,\n    totalHours: finalTotal,\n    notes: (parsedData.notes || '').trim(),\n    \n    // Task satırları\n    taskRows: cleanTasks,\n    taskCount: cleanTasks.length,\n    \n    // Sheet isimleri\n    employeeSheetName: safeEmployeeName || 'Calisan',\n    summarySheetName: 'Ozet',\n    \n    // Kategori özeti\n    categories: [...new Set(cleanTasks.map(t => t.category))],\n    projects: [...new Set(cleanTasks.map(t => t.project))],\n    \n    // Tarih bilgileri (hesaplama için)\n    dateObject: {\n      day: parseInt(formattedDate.split('/')[0]) || 1,\n      month: parseInt(formattedDate.split('/')[1]) || 1,\n      year: parseInt(formattedDate.split('/')[2]) || new Date().getFullYear()\n    },\n    \n    // İşlenme zamanı\n    processedAt: new Date().toLocaleString('tr-TR'),\n    \n    // Orijinal veri\n    originalData: {\n      rawDate: $('Parse Docs Content').item.json.date,\n      rawName: $('Parse Docs Content').item.json.name,\n      rawTasks: $('Parse Docs Content').item.json.tasks\n    }\n  };\n  \n  console.log('İşlenen veri:', {\n    employee: excelData.employee,\n    date: excelData.date,\n    taskCount: excelData.taskCount,\n    totalHours: excelData.totalHours\n  });\n  \n  return [{ json: excelData }];\n  \n} catch (error) {\n  console.error('JSON parse hatası:', error.message);\n  console.log('Ham Claude yanıtı:', claudeResponse);\n  \n  // Hata durumunda fallback veri oluştur\n  const fallbackData = {\n    error: 'Claude JSON parse hatası',\n    errorMessage: error.message,\n    rawResponse: claudeResponse,\n    \n    // Fallback veriler\n    employee: $('Parse Docs Content').item.json.name || 'Bilinmeyen',\n    date: $('Parse Docs Content').item.json.date || new Date().toLocaleDateString('tr-TR'),\n    totalHours: 8,\n    notes: 'Otomatik işleme hatası - manuel kontrol gerekli',\n    \n    taskRows: [{\n      rowNumber: 1,\n      description: $('Parse Docs Content').item.json.tasksText || 'İşlem hatası',\n      category: 'Genel',\n      project: 'Belirtilmemiş',\n      hours: 8,\n      startTime: '',\n      endTime: ''\n    }],\n    \n    employeeSheetName: ($('Parse Docs Content').item.json.name || 'Hata')\n      .replace(/[^a-zA-Z0-9çğıöşüÇĞIİÖŞÜ]/g, '_'),\n    summarySheetName: 'Ozet',\n    \n    processedAt: new Date().toLocaleString('tr-TR')\n  };\n  \n  return [{ json: fallbackData }];\n}"
+      },
+      "id": "f1e4c567-8901-2345-6789-012345678906",
+      "name": "Format Excel Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 250]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{$env.GOOGLE_SHEETS_ID}}",
+        "sheetName": "={{$json.employeeSheetName}}",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Tarih": "={{$json.date}}",
+            "Calisan": "={{$json.employee}}",
+            "Gorev_Aciklamasi": "={{$json.taskRows[0] ? $json.taskRows[0].description : 'Görev bulunamadı'}}",
+            "Kategori": "={{$json.taskRows[0] ? $json.taskRows[0].category : 'Genel'}}",
+            "Proje": "={{$json.taskRows[0] ? $json.taskRows[0].project : 'Genel'}}",
+            "Saat": "={{$json.taskRows[0] ? $json.taskRows[0].hours : $json.totalHours}}",
+            "Baslama_Saati": "",
+            "Bitis_Saati": "",
+            "Notlar": "={{$json.notes}}"
+          }
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED",
+          "useAppend": true
+        }
+      },
+      "id": "f1e4c567-8901-2345-6789-012345678907",
+      "name": "Add to Employee Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1200, 150],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-credential",
+          "name": "Google Sheets OAuth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{$env.GOOGLE_SHEETS_ID}}",
+        "sheetName": "Ozet",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Tarih": "={{$json.date}}",
+            "Calisan": "={{$json.employee}}",
+            "Toplam_Saat": "={{$json.totalHours}}",
+            "Gorev_Sayisi": "={{$json.taskCount || 1}}",
+            "Kategoriler": "={{$json.categories ? $json.categories.join(', ') : 'Genel'}}",
+            "Projeler": "={{$json.projects ? $json.projects.join(', ') : 'Genel'}}",
+            "Islenme_Zamani": "={{$json.processedAt}}",
+            "Durum": "={{$json.error ? 'Hata: ' + $json.error : 'Başarılı'}}"
+          }
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED",
+          "useAppend": true
+        }
+      },
+      "id": "f1e4c567-8901-2345-6789-012345678908",
+      "name": "Add to Summary Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1200, 350],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-credential",
+          "name": "Google Sheets OAuth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ek task satırları için loop\nconst inputData = $input.first().json;\nconst additionalTasks = inputData.taskRows.slice(1); // İlk task zaten ana sheet'e eklendi\n\nconst results = [];\n\n// Her ek task için satır oluştur\nadditionalTasks.forEach((task, index) => {\n  results.push({\n    json: {\n      date: inputData.date,\n      employee: inputData.employee,\n      taskDescription: task.description,\n      category: task.category,\n      project: task.project,\n      hours: task.hours,\n      employeeSheetName: inputData.employeeSheetName,\n      rowNumber: task.rowNumber,\n      isAdditionalTask: true\n    }\n  });\n});\n\n// Eğer ek task yoksa boş array döndür\nif (results.length === 0) {\n  return [{ json: { noAdditionalTasks: true } }];\n}\n\nreturn results;"
+      },
+      "id": "f1e4c567-8901-2345-6789-012345678909",
+      "name": "Process Additional Tasks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1000, 400]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": "={{$env.GOOGLE_SHEETS_ID}}",
+        "sheetName": "={{$json.employeeSheetName}}",
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Tarih": "={{$json.date}}",
+            "Calisan": "={{$json.employee}}",
+            "Gorev_Aciklamasi": "={{$json.taskDescription}}",
+            "Kategori": "={{$json.category}}",
+            "Proje": "={{$json.project}}",
+            "Saat": "={{$json.hours}}",
+            "Baslama_Saati": "",
+            "Bitis_Saati": "",
+            "Notlar": ""
+          }
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED",
+          "useAppend": true
+        }
+      },
+      "id": "f1e4c567-8901-2345-6789-012345678910",
+      "name": "Add Additional Tasks",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4,
+      "position": [1200, 500],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "google-sheets-credential",
+          "name": "Google Sheets OAuth"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "status",
+              "value": "success"
+            },
+            {
+              "name": "message",
+              "value": "Timesheet işleme başarıyla tamamlandı"
+            },
+            {
+              "name": "employee",
+              "value": "={{$('Format Excel Data').item.json.employee}}"
+            },
+            {
+              "name": "date",
+              "value": "={{$('Format Excel Data').item.json.date}}"
+            },
+            {
+              "name": "totalHours",
+              "value": "={{$('Format Excel Data').item.json.totalHours}}"
+            },
+            {
+              "name": "taskCount",
+              "value": "={{$('Format Excel Data').item.json.taskCount}}"
+            },
+            {
+              "name": "sheetName",
+              "value": "={{$('Format Excel Data').item.json.employeeSheetName}}"
+            },
+            {
+              "name": "processedAt",
+              "value": "={{$now.format('DD/MM/YYYY HH:mm:ss')}}"
+            },
+            {
+              "name": "totalProcessed",
+              "value": "={{$('Parse Docs Content').all().length}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f1e4c567-8901-2345-6789-012345678911",
+      "name": "Success Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [1400, 250]
+    }
+  ],
+  "connections": {
+    "Daily Schedule": {
+      "main": [
+        [
+          {
+            "node": "Read Google Docs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read Google Docs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Google Docs": {
+      "main": [
+        [
+          {
+            "node": "Parse Docs Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Docs Content": {
+      "main": [
+        [
+          {
+            "node": "Process with Claude",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process with Claude": {
+      "main": [
+        [
+          {
+            "node": "Format Excel Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Excel Data": {
+      "main": [
+        [
+          {
+            "node": "Add to Employee Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Add to Summary Sheet",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Process Additional Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Employee Sheet": {
+      "main": [
+        [
+          {
+            "node": "Success Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add to Summary Sheet": {
+      "main": [
+        [
+          {
+            "node": "Success Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Additional Tasks": {
+      "main": [
+        [
+          {
+            "node": "Add Additional Tasks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Additional Tasks": {
+      "main": [
+        [
+          {
+            "node": "Success Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "staticData": {},
+  "tags": [
+    {
+      "createdAt": "2024-12-20T15:00:00.000Z",
+      "updatedAt": "2024-12-20T15:00:00.000Z",
+      "id": "timesheet-automation",
+      "name": "Timesheet Automation"
+    }
+  ],
+  "triggerCount": 2,
+  "updatedAt": "2024-12-20T15:00:00.000Z",
+  "versionId": "1.0.0"
+}

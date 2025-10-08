@@ -1,0 +1,14 @@
+15/12/2024
+Ahmet Yılmaz
+
+- Frontend geliştirme çalışmaları
+- API entegrasyonu
+- Code review
+- Toplantıya katılım
+
+16/12/2024  
+Ayşe Kaya
+
+- Database tasarımı
+- Test yazma
+- Bug düzeltmeleri
