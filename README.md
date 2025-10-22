@@ -1,6 +1,6 @@
 ## 🔧 **1. Google Cloud Console Setup**
 
-### API'leri Aktif Et:
+### API'leri Aktif mi check:
 ```
 https://console.cloud.google.com → yeni proje oluştur
 APIs & Services → Library:
@@ -89,19 +89,4 @@ Credentials: claude-api-credential seç
 
 ---
 
-## 🧪 **5. Test Et**
 
-1. **Manual Trigger** butonuna tıkla
-2. Her node'un yeşil ✅ olduğunu kontrol et
-3. Google Sheets'te yeni tab'ların oluştuğunu gör
-
----
-
-## 🔗 **Hangi API key'leri lazım:**
-
-**Claude API Key almak için:**
-```
-https://console.anthropic.com
-Sign up → API Keys → Create Key
-sk-ant-api03-... formatında olacak
-```
